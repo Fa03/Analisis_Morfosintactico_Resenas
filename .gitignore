@@ -1,0 +1,8 @@
+# Entorno virtual
+.venv/
+
+# PyCharm
+.idea/
+
+# Carpeta con set de datos originales
+/data/raw/
