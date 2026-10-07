@@ -1,0 +1,5 @@
+pandas>=1.0.0
+numpy>=1.16.0
+transformers>=4.0.0
+torch>=2.0.0
+sentencepiece>=0.1.99

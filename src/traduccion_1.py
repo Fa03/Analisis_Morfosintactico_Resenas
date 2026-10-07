@@ -25,7 +25,8 @@ def dividir_oraciones(texto):
     return [o for o in re.split(r"(?<=[.!?])\s+", texto) if o]
 
 
-def traducir_lote(textos, tokenizador, modelo, dispositivo, max_reintentos, espera):
+def traducir_lote(textos, tokenizador, modelo, dispositivo, max_reintentos, espera,
+                  num_beams=4):
     """Traduce un lote de textos y reintenta si ocurre un error."""
     import torch
 
@@ -34,7 +35,7 @@ def traducir_lote(textos, tokenizador, modelo, dispositivo, max_reintentos, espe
             entradas = tokenizador(textos, return_tensors="pt", padding=True,
                                    truncation=True, max_length=512).to(dispositivo)
             with torch.no_grad():
-                salida = modelo.generate(**entradas, num_beams=4, max_length=512)
+                salida = modelo.generate(**entradas, num_beams=num_beams, max_length=512)
             return tokenizador.batch_decode(salida, skip_special_tokens=True)
         except Exception as error:  # error de memoria, de red, etc.
             log.warning("Error en el lote (intento %d/%d): %s", intento, max_reintentos, error)

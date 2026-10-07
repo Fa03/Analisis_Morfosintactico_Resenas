@@ -1,6 +1,9 @@
 # Entorno virtual
 .venv/
 
+# Python
+__pycache__/
+
 # PyCharm
 .idea/
 
