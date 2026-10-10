@@ -1,5 +1,12 @@
-pandas>=1.0.0
+# Dependencias del proyecto (Python 3.14, venv en .venv)
+# Instalar con:  .venv/bin/pip install -r requirements.txt
+
+torch>=2.0
+transformers>=4.40
+sentencepiece>=0.2        # obligatorio para MarianTokenizer
+sacremoses>=0.1           # recomendado por MarianTokenizer
+nltk>=3.8
+pandas>=2.0
+tqdm>=4.66
 numpy>=1.16.0
-transformers>=4.0.0
-torch>=2.0.0
-sentencepiece>=0.1.99
+

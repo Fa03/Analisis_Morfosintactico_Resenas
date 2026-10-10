@@ -9,3 +9,5 @@ __pycache__/
 
 # Carpeta con set de datos originales
 /data/raw/
+
+/data/processed/processed.csv

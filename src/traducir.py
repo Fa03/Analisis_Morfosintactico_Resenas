@@ -1,179 +1,104 @@
-"""Traducción de reseñas con MarianMT, pensada para Google Colab (GPU).
+"""Traduce una columna de `processed.csv` al espanol y guarda el resultado.
 
-Archivos necesarios (subir con `from google.colab import files` o clonando
-el repo):
-    - traducir.py
-    - traduccion_1.py
-    - processed.csv  (salida de principal.py)
+Uso:
+    python traducir.py                      # processed.csv -> resenas_es.csv (todo)
+    python traducir.py --limite 20          # prueba rapida con las 20 primeras
+    python traducir.py --beam 4             # beam search (mas lento, mejor calidad)
+    python traducir.py --columna review_summary
 
-Ejemplo en Colab (runtime con GPU: Runtime > Change runtime type > GPU):
-
-    !pip install -q transformers sentencepiece
-    !python traducir.py --entrada processed.csv --salida resenas_es.csv --lote 64
-
-Uso local:
-
-    python src/traducir.py --entrada data/processed/processed.csv \
-        --salida data/processed/resenas_es.csv
-
-La corrida es reanudable: cada --parcial lotes se guarda el avance en
-<salida>_parcial.csv; si se interrumpe, basta con volver a lanzar el mismo
-comando para continuar por donde quedó (las reseñas con review_text_es ya
-relleno no se repiten).
+Es reanudable: guarda cada `--bloque` filas, y si el CSV de salida ya existe
+se salta las filas ya traducidas.
 """
 
+from __future__ import annotations
+
 import argparse
-import logging
-import sys
+import time
 from pathlib import Path
 
 import pandas as pd
 
-# Permite ejecutar el script aunque no se lance desde src/
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from traductor import cargar_modelo, traducir_resenas
 
-from traduccion_1 import armar_oraciones, cargar_traductor, traducir_lote
-
-log = logging.getLogger("traduccion")
-
-COLUMNA = "review_text_es"
-REINTENTOS = 3
-ESPERA = 5
+COLUMNA_DESTINO = "_es"
 
 
 def argumentos():
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--entrada", default="processed.csv",
-                        help="CSV con las reseñas a traducir (por defecto: processed.csv)")
-    parser.add_argument("--salida", default="resenas_es.csv",
-                        help="CSV de salida con la columna review_text_es")
-    parser.add_argument("--modelo", default="Helsinki-NLP/opus-mt-en-es",
-                        help="Modelo de Hugging Face a utilizar")
-    parser.add_argument("--lote", type=int, default=32,
-                        help="Oraciones por lote (subirlo en GPU, p. ej. 64)")
-    parser.add_argument("--beams", type=int, default=4,
-                        help="Beam search: 4 = mejor calidad, 1 = más rápido")
-    parser.add_argument("--parcial", type=int, default=100,
-                        help="Cada cuántos lotes se guarda el avance (0 = sin parcial)")
-    return parser.parse_args()
-
-
-def ruta_parcial(salida):
-    salida = Path(salida)
-    return salida.with_name(salida.stem + "_parcial.csv" + "".join(salida.suffixes[1:]))
-
-
-def cargar_avance(entrada, salida):
-    """Carga las reseñas y recupera el avance de una corrida anterior."""
-    df = pd.read_csv(entrada)
-    if COLUMNA not in df.columns:
-        df[COLUMNA] = ""
-
-    for fuente in (Path(salida), ruta_parcial(salida)):
-        if not fuente.exists():
-            continue
-        previo = pd.read_csv(fuente)
-        if len(previo) == len(df) and COLUMNA in previo.columns:
-            df[COLUMNA] = previo[COLUMNA].fillna("").values
-            log.info("Avance recuperado de %s (%d/%d reseñas ya traducidas)",
-                     fuente, int((df[COLUMNA].astype(str).str.strip() != "").sum()), len(df))
-            return df
-        log.warning("Se ignora %s: no coincide con el CSV de entrada", fuente)
-    return df
-
-
-def preparar_pendientes(df):
-    """Devuelve las reseñas sin traducir y sus oraciones."""
-    texto = df[COLUMNA]
-    pendientes = df[texto.isna() | (texto.astype(str).str.strip() == "")].copy()
-    oraciones = armar_oraciones(pendientes)
-
-    # Reseñas sin oraciones no se pueden traducir: se marcan con su texto original
-    con_oraciones = {indice for indice, _, _ in oraciones}
-    sin_oraciones = [i for i in pendientes.index if i not in con_oraciones]
-    if sin_oraciones:
-        df.loc[sin_oraciones, COLUMNA] = (
-            df.loc[sin_oraciones, "review_text"].fillna("").astype(str))
-        pendientes = pendientes.drop(sin_oraciones)
-
-    return pendientes, oraciones
-
-
-def unir_resultados(df, oraciones, resultados, parcial):
-    """Combina las oraciones traducidas con el resto de las reseñas.
-
-    En un parcial, las oraciones aún no traducidas quedan vacías para que la
-    reanudación las vuelva a procesar; en la salida final se dejan en inglés.
-    """
-    por_resena = {}
-    for (indice, posicion, original), traducida in zip(oraciones, resultados):
-        if traducida is not None:
-            valor = traducida
-        else:
-            valor = "" if parcial else original
-        por_resena.setdefault(indice, []).append((posicion, valor))
-
-    df = df.copy()
-    actuales = df[COLUMNA]
-    df[COLUMNA] = [
-        " ".join(t for _, t in sorted(por_resena[i])) if i in por_resena
-        else (e if isinstance(e, str) else "")
-        for i, e in zip(df.index, actuales)
-    ]
-    return df
-
-
-def traducir(df, pendientes, oraciones, args, salida_parcial):
-    tokenizador, modelo, dispositivo = cargar_traductor(args.modelo)
-
-    # Se ordena por longitud para que cada lote sea más eficiente
-    orden = sorted(range(len(oraciones)), key=lambda i: len(oraciones[i][2]))
-    resultados = [None] * len(orden)
-
-    for inicio in range(0, len(orden), args.lote):
-        posiciones = orden[inicio:inicio + args.lote]
-        textos = [oraciones[i][2] for i in posiciones]
-        traducidos = traducir_lote(textos, tokenizador, modelo, dispositivo,
-                                   REINTENTOS, ESPERA, num_beams=args.beams)
-        for i, texto in zip(posiciones, traducidos):
-            resultados[i] = texto
-
-        lote_num = inicio // args.lote
-        if lote_num % 10 == 0:
-            log.info("Progreso: %d/%d oraciones",
-                     min(inicio + args.lote, len(orden)), len(orden))
-        if args.parcial and lote_num and lote_num % args.parcial == 0:
-            parcial = unir_resultados(df, oraciones, resultados, parcial=True)
-            salida_parcial.parent.mkdir(parents=True, exist_ok=True)
-            parcial.to_csv(salida_parcial, index=False, encoding="utf-8")
-            log.info("Avance guardado: %s", salida_parcial)
-
-    return resultados
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--entrada", default="processed.csv")
+    p.add_argument("--salida", default=None, help="CSV de salida (por defecto: <entrada>_es.csv)")
+    p.add_argument("--columna", default="review_text", help="columna a traducir")
+    p.add_argument("--limite", type=int, default=None, help="traducir solo las N primeras filas")
+    p.add_argument("--lote", type=int, default=64, help="oraciones por tanda de traduccion")
+    p.add_argument("--beam", type=int, default=1, help="num_beams (1=greedy rapido, 4=mejor calidad)")
+    p.add_argument("--bloque", type=int, default=500, help="filas por guardado parcial")
+    p.add_argument("--sin-cuantizar", action="store_true", help="no usar int8 en CPU (mas lento, ~6x)")
+    p.add_argument("--sin-reanudar", action="store_true", help="ignorar lo ya traducido en la salida")
+    return p.parse_args()
 
 
 def main():
     args = argumentos()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
+    entrada = Path(args.entrada)
+    salida = Path(args.salida) if args.salida else entrada.with_name(entrada.stem + COLUMNA_DESTINO + entrada.suffix)
+    destino = args.columna + COLUMNA_DESTINO
 
-    df = cargar_avance(args.entrada, args.salida)
-    pendientes, oraciones = preparar_pendientes(df)
+    if not entrada.exists():
+        raise SystemExit(f"No existe el archivo de entrada: {entrada}")
 
-    salida = Path(args.salida)
-    salida.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(entrada)
+    if args.columna not in df.columns:
+        raise SystemExit(f"La columna '{args.columna}' no existe. Disponibles: {list(df.columns)}")
+    df[args.columna] = df[args.columna].fillna("").astype(str)
+    if args.limite:
+        df = df.head(args.limite).copy()
 
-    if not oraciones:
-        df.to_csv(salida, index=False, encoding="utf-8")
-        log.info("Nada pendiente: %s ya está completa", salida)
+    # Reanudacion: si la salida ya existe, reutilizamos lo ya traducido.
+    hechos = 0
+    if salida.exists() and not args.sin_reanudar:
+        previo = pd.read_csv(salida)
+        if destino in previo.columns:
+            hechos = min(int(previo[destino].notna().sum()), len(df))
+            if hechos:
+                print(f"Reanudando: {hechos} filas ya traducidas en {salida}")
+                df[destino] = pd.Series([None] * len(df), index=df.index, dtype=object)
+                df.loc[df.index[:hechos], destino] = previo[destino].iloc[:hechos].to_numpy()
+
+    pendientes = len(df) - hechos
+    if pendientes <= 0:
+        print(f"Nada que traducir: {len(df)} filas ya estan en {salida}")
         return
 
-    log.info("Oraciones a traducir: %d (de %d reseñas)", len(oraciones), len(pendientes))
-    resultados = traducir(df, pendientes, oraciones, args, ruta_parcial(args.salida))
+    inicio = time.time()
+    stats: dict = {}
+    # Fijamos la cuantizacion antes de traducir: el modelo se carga una sola vez.
+    cargar_modelo(cuantizar=not args.sin_cuantizar)
+    print(f"Traduciendo {pendientes} filas de '{args.columna}' (lote={args.lote}, beam={args.beam})...")
 
-    salida_df = unir_resultados(df, oraciones, resultados, parcial=False)
-    salida_df.to_csv(salida, index=False, encoding="utf-8")
-    fallidas = sum(r is None for r in resultados)
-    log.info("Traducción terminada: %s (oraciones sin traducir: %d)", salida, fallidas)
+    for desde in range(hechos, len(df), args.bloque):
+        hasta = min(desde + args.bloque, len(df))
+        indices = df.index[desde:hasta]
+        df.loc[indices, destino] = traducir_resenas(
+            df.loc[indices, args.columna].tolist(),
+            lote=args.lote,
+            beam=args.beam,
+            verbose=True,
+            stats=stats,
+        )
+        salida.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(salida, index=False)
+        hechas = hasta - hechos
+        elapsed = time.time() - inicio
+        print(
+            f"[{hasta}/{len(df)}] {hechas} filas en {elapsed:.0f}s "
+            f"({elapsed / hechas:.2f}s/fila, ~{elapsed / hechas * pendientes / 60:.0f} min restantes)"
+            f" -> {salida}"
+        )
+
+    print(f"Listo: {salida}  ({len(df)} filas, columna '{destino}')")
+    if stats.get("recortadas"):
+        print(f"Aviso: {stats['recortadas']} de {stats['oraciones']} oraciones llegaron al limite de "
+              f"256 tokens y se truncaron. Sube MAX_TOKENS en traductor.py si es demasiado.")
 
 
 if __name__ == "__main__":
