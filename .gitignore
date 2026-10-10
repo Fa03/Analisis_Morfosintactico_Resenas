@@ -1,8 +1,13 @@
 # Entorno virtual
 .venv/
 
+# Python
+__pycache__/
+
 # PyCharm
 .idea/
 
 # Carpeta con set de datos originales
 /data/raw/
+
+/data/processed/processed.csv
