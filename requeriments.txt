@@ -6,6 +6,7 @@ transformers>=4.40
 sentencepiece>=0.2        # obligatorio para MarianTokenizer
 sacremoses>=0.1           # recomendado por MarianTokenizer
 nltk>=3.8
+spacy>=3.8                # POS tagging en español; instalar modelo: python -m spacy download es_core_news_md
 pandas>=2.0
 tqdm>=4.66
 numpy>=1.16.0
