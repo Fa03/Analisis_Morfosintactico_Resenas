@@ -11,3 +11,9 @@ __pycache__/
 /data/raw/
 
 /data/processed/processed.csv
+
+# Limpieza de corpus
+/src/LimpiezaResenasEspanol.py
+
+#Set de datos despues de pos tagging con toda la info
+/data/results/pos_analysis.csv
