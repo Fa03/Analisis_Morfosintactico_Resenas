@@ -41,3 +41,36 @@ CONFIG = {
     "salida_procesado": BASE_DIR / "data/processed/processed.csv",
     "salida_traducido": BASE_DIR / "data/processed/resenas_es.csv",
 }
+
+
+# Configuración del análisis morfosintáctico (src/metrics.py).
+METRICAS = {
+    # Rutas de entrada y salida
+    "ruta_tokens": BASE_DIR / "data/results/pos_analysis_2.csv",
+    "ruta_metadatos": BASE_DIR / "data/processed/processed_es.csv",
+    "carpeta_salida": BASE_DIR / "outputs",
+    "carpeta_figuras": BASE_DIR / "outputs/figuras",
+    "ruta_cache": BASE_DIR / "outputs/metrics_tokens.csv",
+
+    # Modelo de spaCy y parámetros de cálculo
+    "modelo_spacy": "es_core_news_md",
+    "base_normalizacion": 100,
+    "tamano_bloque": 100,
+
+    # Umbrales de polaridad a partir del rating (1-10)
+    "rating_negativo": 4,
+    "rating_positivo": 7,
+
+    # Géneros comparados en el Eje A (proxy de Comedia vs Terror)
+    "generos_eje_a": ["Comedy", "Drama"],
+
+    # Etiquetas que se excluyen de todas las métricas
+    "etiquetas_excluidas": ["PUNCT", "SYM", "SPACE", "X"],
+
+    # Léxico usado en las métricas del Eje B
+    "negaciones": [
+        "no", "nunca", "jamás", "jamas", "nada", "nadie", "tampoco",
+        "ni", "sin", "ningún", "ningun", "ninguna", "ninguno", "sino",
+    ],
+    "adverbios_intensidad": ["muy", "demasiado", "totalmente"],
+}
